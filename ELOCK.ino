@@ -26,7 +26,7 @@ SoftwareSerial m_serial(rxPin,txPin);
 String MSG("");
 String SMS("");
 char myRelay=1;
-char myPhone[]={"18501308512"};
+char myPhone[]={"13901308512"};
 char snd_tips[]={"Init finished.COMMAND[open,close,ask]"};
 char snd_unrelated[]={"Error CMD"};
 char snd_ask_o[]={"Opened"};
