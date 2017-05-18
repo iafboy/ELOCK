@@ -2,6 +2,8 @@
 //define Pins and Data for SIM900A
 #define rxPin 10
 #define txPin 11
+//define input of servo
+#define seroIn 3
 enum SMStype {UNRELATED,OPEN,CLOSE,ASK};
 
 //蓝牙通讯接口
@@ -24,13 +26,11 @@ SoftwareSerial m_serial(rxPin,txPin);
 String MSG("");
 String SMS("");
 char myRelay=1;
-char myPhone[]={"1xxxxxxxxxx"};
-char snd_tips[]={"Send open to open. Send close to close. Send ask to get the status. Case-Insensitive!"};
-char snd_unrelated[]={"Sorry.I can't understand what you sent!"};
-char snd_open[]={"The LOCK has been Opened!"};
-char snd_close[]={"The LOCK has been Colsed!"};
-char snd_ask_o[]={"The LOCK is Opening..."};
-char snd_ask_c[]={"The LOCK is Closing..."};
+char myPhone[]={"18501308512"};
+char snd_tips[]={"Init finished.COMMAND[open,close,ask]"};
+char snd_unrelated[]={"Error CMD"};
+char snd_ask_o[]={"Opened"};
+char snd_ask_c[]={"Closed"};
 
 //function declaration
 void init(SoftwareSerial &p_serial);                                            //initialize the sim900a module
@@ -55,15 +55,55 @@ void setup()  //初始化内容
 {
   Serial.begin(9600);     //定义波特率9600
   BTSerial.begin(9600);   //蓝牙波特率
-  myservo.attach(10);     //初始化舵机
+  myservo.attach(seroIn);     //初始化舵机
+  myservo.write(0);       //锁车
   init(m_serial);         //初始化sim900a
   sndSMS(myPhone,snd_tips,m_serial);//发送提示短信
 }
 
 void loop()   //主循环
 {
-   myservo.write(180);
-   getGPSinfo();
+   delay(100);
+   getMSG(MSG,m_serial);
+   //delay(100);
+   if(!chkMSG(MSG))
+     return;
+   rcvSMS(SMS,m_serial);
+   delay(100);
+   switch(chkSMS(SMS))
+   {
+     case OPEN:
+     {
+       myservo.write(0);
+       break;
+     }
+     case CLOSE:
+     {
+       myservo.write(90);
+       break;
+     }
+     case ASK:
+     {
+       //sent status and GPS information
+       int sg=myservo.read();
+       getGPSinfo();
+       if(sg==0){
+         sndSMS(myPhone,snd_ask_c,m_serial);
+         delay(100);
+      }else{
+        sndSMS(myPhone,snd_ask_o,m_serial);
+        delay(100);
+      }
+       break;
+     }
+     default:
+     {
+       sndSMS(myPhone,snd_unrelated,m_serial);
+       delay(100);
+       sndSMS(myPhone,snd_tips,m_serial);
+       delay(100);
+     }
+   }
 }
 void getGPSinfo(){
   // For one second we parse GPS data and report some key values
