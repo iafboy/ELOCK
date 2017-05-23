@@ -1,3 +1,4 @@
+#此Demo用于演示共享单车电子锁
 #include <SoftwareSerial.h>
 //define Pins and Data for SIM900A
 #define rxPin 10
