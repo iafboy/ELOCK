@@ -1,14 +1,29 @@
-#此Demo用于演示共享单车电子锁
+//#此Demo用于演示共享单车电子锁
 #include <SoftwareSerial.h>
 //define Pins and Data for SIM900A
-#define rxPin 10
-#define txPin 11
-//define input of servo
+#define rxSim 10
+#define txSim 11
+//define Pins and Data for GPS
+#define rxGPS 6
+#define txGPS 7
+#define powerpin 4
+//define Pins and Data for BLE
+#define rxBLE 8
+#define txBLE 9
+//define Pins and Data for servo
 #define seroIn 3
 enum SMStype {UNRELATED,OPEN,CLOSE,ASK};
 
+//是否打印debug信息
+bool debug=true;
+
 //蓝牙通讯接口
-SoftwareSerial BTSerial(8, 9);//RX,TX for BLE
+//SoftwareSerial BTSerial(rxBLE, txBLE);//RX,TX
+//GPS通讯接口
+SoftwareSerial GPSSerial(rxGPS, txGPS);//RX,TX
+//SIM900A通讯接口
+SoftwareSerial m_serial(rxSim,txSim);//RX,TX
+
 //舵机--控制开锁锁芯
 #include <Servo.h>
 Servo myservo;
@@ -22,16 +37,14 @@ String lndSpeed;    //速度
 String gpsTime;     //UTC时间，本初子午线经度0度的时间，和北京时间差8小时
 String beiJingTime;   //北京时间
 
-//globle variable
-SoftwareSerial m_serial(rxPin,txPin);
 String MSG("");
 String SMS("");
 char myRelay=1;
-char myPhone[]={"13901308512"};
-char snd_tips[]={"Init finished.COMMAND[open,close,ask]"};
-char snd_unrelated[]={"Error CMD"};
-char snd_ask_o[]={"Opened"};
-char snd_ask_c[]={"Closed"};
+char myPhone[]={"xxxxxxxxx"};
+String snd_tips="Init finished";
+String snd_unrelated="Error CMD";
+String snd_status_o="Opened";
+String snd_status_c="Closed";
 
 //function declaration
 void init(SoftwareSerial &p_serial);                                            //initialize the sim900a module
@@ -39,7 +52,7 @@ void getMSG(String &p_MSG,SoftwareSerial &p_serial);                            
 bool chkMSG(String &p_MSG);                                                     //check the message's type
 void rcvSMS(String &p_SMS,SoftwareSerial &p_serial);                            //recieve the first SMS
 char chkSMS(String &p_SMS);                                                     //check the SMS's type
-void sndSMS(const char *phone_num,const char *content,SoftwareSerial &p_serial);//send Short Message
+void sndSMS(const char *phone_num,String content,SoftwareSerial &p_serial);//send Short Message
 
 void init(SoftwareSerial &p_serial)
 {
@@ -54,16 +67,29 @@ void init(SoftwareSerial &p_serial)
 
 void setup()  //初始化内容
 {
-  Serial.begin(9600);     //定义波特率9600
-  BTSerial.begin(9600);   //蓝牙波特率
-  myservo.attach(seroIn);     //初始化舵机
-  myservo.write(0);       //锁车
-  init(m_serial);         //初始化sim900a
-  sndSMS(myPhone,snd_tips,m_serial);//发送提示短信
+  Serial.begin(9600);      //定义波特率9600
+  //BTSerial.begin(9600);  //蓝牙波特率
+  // if (powerpin) {
+  //   pinMode(powerpin, OUTPUT);
+  // }
+  GPSSerial.begin(9600);   //GPS波特率
+  //digitalWrite(powerpin, LOW);// pull low to turn on!
+  m_serial.begin(9600);    //SIM波特率
+  myservo.attach(seroIn);  //初始化舵机
+  myservo.write(0);        //锁车
+  delay(100);
+  init(m_serial);          //初始化sim900a
+  getGPSinfo();
+  String msg=snd_status_o+","+latitude+","+longitude+","+lndSpeed+","+gpsTime;
+  sndSMS(myPhone,msg,m_serial);//发送提示短信
+  if(debug)
+    Serial.println("inited | "+msg);
 }
 
 void loop()   //主循环
 {
+   if(debug)
+      Serial.println("--- Loop ---");
    delay(100);
    getMSG(MSG,m_serial);
    //delay(100);
@@ -71,38 +97,45 @@ void loop()   //主循环
      return;
    rcvSMS(SMS,m_serial);
    delay(100);
+   getGPSinfo();
+   String locationInfo=latitude+","+longitude+","+lndSpeed+","+gpsTime;
    switch(chkSMS(SMS))
    {
      case OPEN:
      {
        myservo.write(0);
+       String msg=snd_status_o+","+locationInfo;
+       sndSMS(myPhone,msg,m_serial);
        break;
      }
      case CLOSE:
      {
        myservo.write(90);
+       String msg=snd_status_c+","+locationInfo;
+       sndSMS(myPhone,msg,m_serial);
        break;
      }
      case ASK:
      {
        //sent status and GPS information
        int sg=myservo.read();
-       getGPSinfo();
        if(sg==0){
-         sndSMS(myPhone,snd_ask_c,m_serial);
+         String msg=snd_status_c+","+locationInfo;
+         sndSMS(myPhone,msg,m_serial);
          delay(100);
       }else{
-        sndSMS(myPhone,snd_ask_o,m_serial);
+        String msg=snd_status_o+","+locationInfo;
+        sndSMS(myPhone,msg,m_serial);
         delay(100);
       }
        break;
      }
      default:
      {
-       sndSMS(myPhone,snd_unrelated,m_serial);
+       String msg=snd_unrelated+","+locationInfo;
+       sndSMS(myPhone,msg,m_serial);
        delay(100);
-       sndSMS(myPhone,snd_tips,m_serial);
-       delay(100);
+       break;
      }
    }
 }
@@ -110,32 +143,31 @@ void getGPSinfo(){
   // For one second we parse GPS data and report some key values
   for (unsigned long start = millis(); millis() - start < 1000;)  //一秒钟内不停扫描GPS信息
   {
-    BTSerial.println("waiting...");
-    while (Serial.available())  //串口获取到数据开始解析
+    Serial.println("waiting...");
+    while (GPSSerial.available())  //串口获取到数据开始解析
     {
-      char c = Serial.read(); //读取一个字节获取的数据
+      char c = GPSSerial.read(); //读取一个字节获取的数据
       switch(c)         //判断该字节的值
       {
       case '$':         //若是$，则说明是一帧数据的开始
-        Serial.readBytesUntil('*', nmeaSentence, 67);   //读取接下来的数据，存放在nmeaSentence字符数组中，最大存放67个字节
+        GPSSerial.readBytesUntil('*', nmeaSentence, 67);   //读取接下来的数据，存放在nmeaSentence字符数组中，最大存放67个字节
         //Serial.println(nmeaSentence);
         latitude = parseGprmcLat(nmeaSentence); //获取纬度值
         longitude = parseGprmcLon(nmeaSentence);//获取经度值
         lndSpeed = parseGprmcSpeed(nmeaSentence);//获取速度值
         gpsTime = parseGprmcTime(nmeaSentence);//获取GPS时间
 
-
         if(latitude > "")   //当不是空时候打印输出
         {
-          Serial.println("------------------------------------");
+          Serial.println("---------------------");
           Serial.println("latitude: " + latitude);
-          BTSerial.print(latitude+"|");
+          //BTSerial.print(latitude+"|");
         }
 
         if(longitude > "")    //当不是空时候打印输出
         {
           Serial.println("longitude: " + longitude);
-          BTSerial.println(longitude);
+          //BTSerial.println(longitude);
         }
 
         if(lndSpeed > "")   //当不是空时候打印输出
@@ -149,13 +181,13 @@ void getGPSinfo(){
           beiJingTime = getBeiJingTime(gpsTime);  //获取北京时间
           Serial.println("beiJingTime: " + beiJingTime);
         }
+        break;
       }
     }
   }
 }
 
-String getBeiJingTime(String s)
-{
+String getBeiJingTime(String s){
   int hour = s.substring(0,2).toInt();
   int minute = s.substring(2,4).toInt();
   int second = s.substring(4,6).toInt();
@@ -171,8 +203,7 @@ String getBeiJingTime(String s)
 //Parse GPRMC NMEA sentence data from String
 //String must be GPRMC or no data will be parsed
 //Return Latitude
-String parseGprmcLat(String s)
-{
+String parseGprmcLat(String s){
   int pLoc = 0; //paramater location pointer
   int lEndLoc = 0; //lat parameter end location
   int dEndLoc = 0; //direction parameter end location
@@ -180,8 +211,7 @@ String parseGprmcLat(String s)
   /*make sure that we are parsing the GPRMC string.
    Found that setting s.substring(0,5) == "GPRMC" caused a FALSE.
    There seemed to be a 0x0D and 0x00 character at the end. */
-  if(s.substring(0,4) == "GPRM")
-  {
+  if(s.substring(0,4) == "GPRM"){
     //Serial.println(s);
     for(int i = 0; i < 5; i++)
     {
@@ -221,8 +251,7 @@ String parseGprmcLat(String s)
 //Parse GPRMC NMEA sentence data from String
 //String must be GPRMC or no data will be parsed
 //Return Longitude
-String parseGprmcLon(String s)
-{
+String parseGprmcLon(String s){
   int pLoc = 0; //paramater location pointer
   int lEndLoc = 0; //lat parameter end location
   int dEndLoc = 0; //direction parameter end location
@@ -280,8 +309,7 @@ String parseGprmcSpeed(String s)
   /*make sure that we are parsing the GPRMC string.
    Found that setting s.substring(0,5) == "GPRMC" caused a FALSE.
    There seemed to be a 0x0D and 0x00 character at the end. */
-  if(s.substring(0,4) == "GPRM")
-  {
+  if(s.substring(0,4) == "GPRM"){
     //Serial.println(s);
     for(int i = 0; i < 8; i++)
     {
@@ -311,8 +339,7 @@ String parseGprmcSpeed(String s)
 //Parse GPRMC NMEA sentence data from String
 //String must be GPRMC or no data will be parsed
 //Return Longitude
-String parseGprmcTime(String s)
-{
+String parseGprmcTime(String s){
   int pLoc = 0; //paramater location pointer
   int lEndLoc = 0; //lat parameter end location
   int dEndLoc = 0; //direction parameter end location
@@ -349,8 +376,7 @@ String parseGprmcTime(String s)
 }
 
 
-void sndSMS(const char *phone_num,const char *content,SoftwareSerial &p_serial)
-{
+void sndSMS(const char *phone_num,String content,SoftwareSerial &p_serial){
   p_serial.println("AT");
   delay(500);
   p_serial.println("AT+CSCS=\"GSM\"");
@@ -369,8 +395,7 @@ void sndSMS(const char *phone_num,const char *content,SoftwareSerial &p_serial)
   delay(100);
 }
 
-void rcvSMS(String &p_SMS,SoftwareSerial &p_serial)
-{
+void rcvSMS(String &p_SMS,SoftwareSerial &p_serial){
   p_SMS="";
   m_serial.println("AT");
   delay(500);
